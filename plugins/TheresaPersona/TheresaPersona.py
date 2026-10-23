@@ -1,0 +1,188 @@
+import re
+from collections import defaultdict
+
+from sqlalchemy import BigInteger, Column, DateTime, Text, desc, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import declarative_base, sessionmaker
+
+from plugins import Plugins, plugin_main
+from src.event_handler.GroupMessageEventHandler import GroupMessageEvent
+from src.PrintLog import Log
+from utils.AITools import get_llm_response
+from utils.CQHelper import CQHelper
+from utils.CQType import At
+
+Base = declarative_base()
+
+# 每个用户最多拉取的最近发言条数，限制上下文长度
+MAX_MESSAGES = 400
+# 拼接给 llm 的消息正文的最大字符数预算，超出则只保留最近的
+CHAR_BUDGET = 12000
+
+# 人格分析需要覆盖的维度
+ANALYSIS_DIRECTIONS = (
+    "兴趣爱好",
+    "性格特点（外向/内向、乐观/悲观、幽默程度等）",
+    "身份/出身（职业、专业、在校学生身份等）",
+    "是哪里人（从口音、提到的地名、生活习惯推断）",
+    "口头禅（反复出现的高频用语）",
+    "在哪些群聊里活跃（及活跃程度、在群里的角色）",
+    "常与谁互动、社会关系",
+    "作息规律",
+    "常用的语气、表情、网络用语",
+)
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, nullable=False)
+    group_id = Column(BigInteger, nullable=False)
+    msg = Column(Text, nullable=False)
+    send_time = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    msg_id = Column(BigInteger, nullable=False, default=0)
+    user_nickname = Column(Text, nullable=False, default=" ")
+    user_card = Column(Text, nullable=False, default=" ")
+
+
+class TheresaPersona(Plugins):
+    def __init__(self, server_address, bot):
+        super().__init__(server_address, bot)
+        self.name = "TheresaPersona"
+        self.type = "Group"
+        self.author = "Eason"
+        self.introduction = """
+                                根据某人在各群聊的历史聊天记录，用大模型总结TA的人格画像
+                                usage: Eason persona <@某人>
+                            """
+        self.init_status()
+        self.session_factory = sessionmaker(
+            bind=self.bot.database, class_=AsyncSession, expire_on_commit=False
+        )
+
+    @staticmethod
+    def _strip_cq(message: str) -> str:
+        """去掉消息里的 CQ 码（at/image/face 等），只保留纯文本"""
+        return re.sub(r"\[CQ:[^\]]*\]", "", message).strip()
+
+    @staticmethod
+    def _extract_at_qq(message: str) -> int | None:
+        """从触发消息里解析出被 @ 的 QQ 号"""
+        for cq in CQHelper.loads_cq(message):
+            if cq.cq_type == "at":
+                qq = cq.qq
+                if qq.isdigit():
+                    return int(qq)
+        return None
+
+    def _group_name(self, group_id: int) -> str:
+        """获取群名，失败则退回群号"""
+        try:
+            data = self.api.groupService.get_group_info(group_id=group_id).get("data") or {}
+            return data.get("group_name") or str(group_id)
+        except Exception:
+            return str(group_id)
+
+    @plugin_main(call_word=["Eason persona"], require_db=True)
+    async def main(self, event: GroupMessageEvent, debug: bool):
+        target_id = self._extract_at_qq(event.message)
+
+        if target_id is None:
+            self.api.groupService.send_group_msg(
+                group_id=event.group_id,
+                message=f"{At(qq=event.user_id)} 请 @ 一个你感兴趣的人，例如：Eason persona @小明",
+            )
+            return
+
+        confirm_msg = "正在翻阅TA的群聊历史并生成人格画像，请稍等~"
+        self.api.groupService.send_group_msg(group_id=event.group_id, message=confirm_msg)
+
+        try:
+            async with self.session_factory() as session:
+                # 拉取该用户最近的发言（跨所有已记录的群），用于统计活跃群
+                stmt = (
+                    select(Message)
+                    .where(Message.user_id == target_id)
+                    .order_by(desc(Message.id))
+                    .limit(MAX_MESSAGES)
+                )
+                result = await session.execute(stmt)
+                rows = list(result.scalars().all())
+
+                if not rows:
+                    self.api.groupService.send_group_msg(
+                        group_id=event.group_id,
+                        message=f"{At(qq=event.user_id)} 数据库中暂无 [QQ:{target_id}] 的发言记录，无法生成人格画像",
+                    )
+                    return
+
+            # 消息按 id 升序（时间正序），并统计每个群的发言量
+            rows = sorted(rows, key=lambda r: r.id)
+            group_count: dict[int, int] = defaultdict(int)
+            for row in rows:
+                group_count[row.group_id] += 1
+
+            # 组装正序 transcript，控制在字符预算内（超出则只保留最近的）
+            transcript_lines = []
+            used = 0
+            nickname = ""
+            for row in reversed(rows):
+                text = self._strip_cq(row.msg)
+                if not text:
+                    continue
+                line = f"[群 {row.group_id}] {row.user_nickname}({row.user_id}): {text}"
+                used += len(line) + 1
+                if used > CHAR_BUDGET:
+                    break
+                transcript_lines.append(line)
+            transcript = "\n".join(reversed(transcript_lines))
+            if rows and not nickname:
+                nickname = rows[-1].user_nickname
+
+            # 活跃群排名 + 群名映射
+            ordered_groups = sorted(group_count.items(), key=lambda kv: kv[1], reverse=True)
+            active_groups_desc = "、".join(
+                f"{self._group_name(gid)}（群{gid}，{cnt}条）" for gid, cnt in ordered_groups
+            )
+
+            directions_txt = "\n".join(f"- {d}" for d in ANALYSIS_DIRECTIONS)
+            system_prompt = (
+                "你是一位资深的行为分析专家。下面是一次性给你的一段某位QQ用户在若干群聊中的发言记录摘录，"
+                "请你基于这些真实的发言内容，分析并总结这个人的人格画像。\n"
+                "要求：\n"
+                "1. 只能依据给定材料推断，不要编造材料中没有的信息；信息不足的维度明确说明'暂无法判断'。\n"
+                "2. 分点输出，覆盖但不限于以下方向：\n"
+                f"{directions_txt}\n"
+                "3. 用中文、口语化、有条理地输出，开头不必寒暄，直接给出分析正文。"
+            )
+            user_prompt = (
+                f"以下是用户在 [QQ:{target_id}]（{nickname}）近期的群聊发言摘录，按时间顺序排列。\n\n"
+                f"【活跃群聊】{active_groups_desc}\n\n【发言记录】\n{transcript}"
+            )
+            Log.debug(f"插件{self.name}：已为 {target_id} 组装 {len(rows)} 条消息送审", debug)
+
+            response = await get_llm_response(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                model="deepseek-v4-pro",
+                thinking_enabled=False,
+            )
+
+            if "[NO REPLY]" in response:
+                response = "抱歉，大模型暂时没有返回结果，请稍后再试~"
+
+            self.api.groupService.send_group_msg(
+                group_id=event.group_id,
+                message=f"【{nickname or ('QQ:' + str(target_id))}的人格画像】\n{response}",
+            )
+            Log.debug(f"插件{self.name}：已输出 {target_id} 的人格画像", debug)
+
+        except Exception as e:
+            Log.error(f"插件{self.name}运行时出错：{e}")
+            self.api.groupService.send_group_msg(
+                group_id=event.group_id,
+                message=f"{At(qq=event.user_id)} 生成人格画像时出错，请稍后再试：{e}",
+            )
