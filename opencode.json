@@ -8,7 +8,8 @@
         "apiKey": "{env:DEEPSEEK_API_KEY}"
       },
       "models": {
-        "deepseek-chat": { "name": "DeepSeek V4" }
+        "deepseek-chat": { "name": "DeepSeek V4" },
+        "deepseek-flash": { "name": "DeepSeek Flash" }
       }
     }
   },

@@ -114,10 +114,8 @@ class TheresaEason(Plugins):
     def _run_opencode_blocking(self, prompt: str) -> str:
         """在伪终端里跑 opencode（headless 需要 TTY 才能驱动），返回最终回复文本"""
         opencode_bin = os.environ.get("OPENCODE_BIN", "/usr/local/bin/opencode")
-        shell_cmd = (
-            f"{opencode_bin} run --format json -m deepseek/deepseek-chat --auto "
-            + shlex.quote(prompt)
-        )
+        model = os.environ.get("OPENCODE_MODEL", "deepseek/deepseek-flash")
+        shell_cmd = f"{opencode_bin} run --format json -m {model} --auto " + shlex.quote(prompt)
         # 把 bot 的 key / DB / OneBot 环境传给 opencode（其 MCP server 也要用）
         env = dict(os.environ)
         env.setdefault("DEEPSEEK_API_KEY", env.get("DPSK_KEY", ""))
