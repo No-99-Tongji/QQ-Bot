@@ -66,30 +66,33 @@ class TheresaSing(Plugins):
         except Exception:
             return ""
 
-    async def _netease_resolve(self, query: str) -> tuple[str, int | None, str, str]:
+    async def _netease_resolve(self, query: str) -> tuple[str, int | None, str, str, str, str]:
         """本机没有的歌，去网易云判断。
 
-        返回 (kind, song_id, song_name, lyric_line)：
-        - kind="music"   → 确认是陈奕迅的歌，转发其网易云
-        - kind="suggest" → 不是陈奕迅，给出最可能的陈奕迅歌名 + LLM给的一句代表歌词
+        返回 (kind, song_id, song_name, lyric_line, found_song, found_artist)：
+        - kind="music"   → 确认是陈奕迅的歌，转发其网易云；found_* 即该歌
+        - kind="suggest" → 不是陈奕迅，found_* 是搜到的真实歌，song_name 给出最可能的陈奕迅歌名，lyric_line 是代表歌词
         - kind="none"    → 没搜到
         """
         results = search_music(query, {}, limit=5)
         eason = next((r for r in results if "陈奕迅" in r["artists"]), None)
         if eason is not None:
-            return ("music", eason["id"], eason["name"], "")
+            return ("music", eason["id"], eason["name"], "", eason["name"], "陈奕迅")
 
-        # 不是陈奕迅的歌：从本地歌单里找一个最接近的歌名作为"最可能"
+        found_song = results[0]["name"] if results else ""
+        found_artist = results[0]["artists"] if results else ""
+
+        # 搜到的不是陈奕迅的歌：从本地歌单里找一个最接近的歌名作为"最可能"
         names = [
             os.path.splitext(f)[0] for f in os.listdir(self.songs_dir) if f.lower().endswith(".mp3")
         ]
         guesses = difflib.get_close_matches(query, names, n=1, cutoff=0.25)
         if not guesses:
-            return ("none", None, None, "")
+            return ("none", None, None, "", found_song, found_artist)
 
         guess = guesses[0]
         lyric_line = await self._representative_lyric(guess)
-        return ("suggest", None, guess, lyric_line)
+        return ("suggest", None, guess, lyric_line, found_song, found_artist)
 
     @plugin_main(call_word=["Eason sing"])
     async def main(self, event: GroupMessageEvent, debug: bool):
@@ -129,7 +132,14 @@ class TheresaSing(Plugins):
         if path is None:
             # 本机没有这首歌：交给网易云处理（是陈奕迅的 → 转发；不是 → 提示说错了）
             try:
-                kind, song_id, song_name, lyric_line = await self._netease_resolve(query)
+                (
+                    kind,
+                    song_id,
+                    song_name,
+                    lyric_line,
+                    found_song,
+                    found_artist,
+                ) = await self._netease_resolve(query)
             except Exception as e:
                 Log.error(f"插件{self.name}查询网易云失败：{e}")
                 similar = "、".join(os.path.basename(p) for p in songs.values())
@@ -144,23 +154,33 @@ class TheresaSing(Plugins):
                     group_id=event.group_id,
                     message=f"[CQ:music,type=163,id={song_id}] 这首我还没下载，给你推一下网易云的《{song_name}》~",
                 )
-            elif kind == "suggest":
-                lyric_note = f"\n代表歌词：{lyric_line}" if lyric_line else ""
-                self.api.groupService.send_group_msg(
-                    group_id=event.group_id,
-                    message=(
-                        f"{At(qq=event.user_id)} 你是不是说错啦？这首好像不是陈奕迅的。"
-                        f"陈奕迅应该是《{song_name}》{lyric_note}\n试试：Eason sing {song_name}"
-                    ),
-                )
-            else:
-                self.api.groupService.send_group_msg(
-                    group_id=event.group_id,
-                    message=(
-                        f"{At(qq=event.user_id)} 网抑云上没搜到《{query}》相关的陈奕迅歌曲，"
-                        "是不是歌名记错啦？（输入 Eason sing 歌单 看看我会唱哪些）"
-                    ),
-                )
+            elif kind in ("suggest", "none"):
+                if found_song:
+                    real_info = "这首歌其实是"
+                    if found_artist:
+                        real_info += f"{found_artist}的《{found_song}》，不是陈奕迅的"
+                    else:
+                        real_info += f"《{found_song}》，不是陈奕迅的"
+                else:
+                    real_info = "网抑云上没搜到这首歌"
+                if song_name:
+                    lyric_note = f"\n代表歌词：{lyric_line}" if lyric_line else ""
+                    self.api.groupService.send_group_msg(
+                        group_id=event.group_id,
+                        message=(
+                            f"{At(qq=event.user_id)} 你是不是说错啦？{real_info}。"
+                            f"你大概是想要陈奕迅的《{song_name}》？{lyric_note}"
+                            f"\n试试：Eason sing {song_name}"
+                        ),
+                    )
+                else:
+                    self.api.groupService.send_group_msg(
+                        group_id=event.group_id,
+                        message=(
+                            f"{At(qq=event.user_id)} {real_info}，是不是歌名记错啦？"
+                            "（输入 Eason sing 歌单 看看我会唱哪些）"
+                        ),
+                    )
             return
 
         Log.debug(f"插件{self.name}：群{event.group_id} 点歌《{os.path.basename(path)}》", debug)
