@@ -1,9 +1,11 @@
+import asyncio
 import json
 import os
 import re
+import shlex
+import subprocess
 import time
 
-from openai import AsyncOpenAI
 from sqlalchemy import BigInteger, Column, DateTime, Text, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -18,82 +20,19 @@ Base = declarative_base()
 # 触发词：提到 bot 的名字就搭话
 TRIGGER_WORDS = ["逸浔", "小逸"]
 # 每次搭话的冷却时间（秒），避免连续刷屏/自循环
-COOLDOWN_TIME = 2
+COOLDOWN_TIME = 3
 # 组装给 llm 的群上下文条数
 CONTEXT_LENGTH = 10
-# 工具调用的最大往返次数
-MAX_TOOL_TURNS = 6
 
-# llm 可调用的"插件"工具。key 是对配置里 allowed_plugins 的简短名。
-# tool: 暴露给 llm 的 function 定义
-# plugin: 实际调用的插件类名（从 bot.plugins_list 里按 name 找）
-# build_event: (args, self) -> 合成给该插件 main 的触发消息
-TOOL_REGISTRY = {
-    "sing": {
-        "tool": {
-            "type": "function",
-            "function": {
-                "name": "sing_song",
-                "description": (
-                    "真正播放某首歌（发语音）。只有当用户明确发出唱/点歌/播放的指令时才"
-                    "调用，例如'唱首浮夸''点歌''放一首X'。若用户只是在问歌名、考歌、"
-                    "讨论歌词或纠正你，绝对不要调用此工具，直接用文字回答。"
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {"song": {"type": "string", "description": "歌名或点歌关键词"}},
-                    "required": ["song"],
-                },
-            },
-        },
-        "plugin": "TheresaSing",
-        "build_event": lambda a: f"Eason sing {a['song']}",
-    },
-    "persona": {
-        "tool": {
-            "type": "function",
-            "function": {
-                "name": "show_persona",
-                "description": (
-                    "展示某个 QQ 用户的群聊人格画像（基于TA的历史发言总结）。只有当用户明确"
-                    "要求查看某人的人格/画像/为人/介绍时才调用。若不知目标QQ或身份，"
-                    "先向用户询问是谁，不要凭空编造画像。"
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "target": {
-                            "type": "string",
-                            "description": "要画像的QQ号或群名片/昵称，可为空",
-                        }
-                    },
-                    "required": [],
-                },
-            },
-        },
-        "plugin": "TheresaPersona",
-        "build_event": lambda a: (
-            f"Eason persona [CQ:at,qq={a['target']}]"
-            if (a.get("target", "") or "").isdigit()
-            else f"Eason persona {a.get('target', '')}".rstrip()
-        ),
-    },
-}
-
-SINGER_PERSONA = (
-    "你是一个热爱陈奕迅（Eason Chan）的歌手，会唱很多陈奕迅的歌，像《十年》《浮夸》"
-    "《富士山下》《K歌之王》《单车》《好久不见》这些张口就来。"
-    "你在和朋友们的 QQ 群里。\n"
-    "关于工具：\n"
-    "1. 只有在用户明确要求你唱歌/点歌/播放某首歌时，才调用 sing_song 工具真正播放。\n"
-    "2. 只有在用户明确要求查看某个人的画像/人格/介绍时，才调用 show_persona 工具。\n"
-    "3. 如果用户只是在聊天、问歌名、考你歌、纠正你、讨论歌词，绝不要调用唱歌工具。\n"
-    "4. 当你调用了工具，就等待工具结果，再依据结果简短回应。绝不要用文字假装你已经"
-    "唱了或介绍了——除非你真的调用了工具并等到成功。\n"
-    "回复要求：\n"
-    "- 每次回复都非常简短，两三句话以内。\n"
-    "- 可以自然引用陈奕迅的歌词或提到他的歌。\n"
-    "- 语气亲切、随性，像个爱唱歌的朋友，不要说教，不要用 markdown。"
+SYSTEM_HINT = (
+    "你是QQ群里的 bot「逸浔/小逸」，一个热爱陈奕迅的歌手，会唱很多陈奕迅的歌。\n"
+    "规则：\n"
+    "1. 回复必须非常简短，两三句话以内，亲切随性，可用陈奕迅歌词/提到他的歌。\n"
+    "2. 只有当用户明确要求唱歌/点歌/播放时才调用 sing_song 工具；"
+    "只有当用户明确要求看某人的画像/人格时才调用 show_persona 工具。"
+    "只是聊天/问歌名/考歌/纠正时不要调用工具。\n"
+    "3. 调用工具后等待结果，再依结果简短回应；不要假装已经做了而实际没调用工具。\n"
+    "4. 不要用 markdown。"
 )
 
 
@@ -117,7 +56,8 @@ class TheresaEason(Plugins):
         self.type = "Group"
         self.author = "Eason"
         self.introduction = """
-                                提到 bot 名字（逸浔/小逸）时，以陈奕迅歌迷+歌手的身份简短回应
+                                提到 bot 名字（逸浔/小逸）时，转交给 opencode（自动模式）对话，
+                                opencode 通过 MCP 调用唱歌/人物画像等能力，结果汇总后回群里
                                 usage: 消息里带上 逸浔 或 小逸 即可
                             """
         self.init_status()
@@ -125,17 +65,13 @@ class TheresaEason(Plugins):
             bind=self.bot.database, class_=AsyncSession, expire_on_commit=False
         )
         self.group_cooldown: dict[int, float] = {}
-        # 触发当前对话的群/用户上下文，供工具合成事件用
-        self._last_group_id = 0
-        self._last_user_id = 0
-        self._last_nick = ""
 
     @staticmethod
     def _clean(message: str) -> str:
         """去掉 CQ 码得到纯文本"""
         return re.sub(r"\[CQ:[^\]]*\]", "", message).strip()
 
-    async def _load_context(self, group_id: int) -> list[dict]:
+    async def _load_context(self, group_id: int) -> list[str]:
         """拉取该群最近的聊天上下文（正序）；跳过以 Eason 开头的 bot 指令"""
         async with self.session_factory() as session:
             stmt = (
@@ -146,107 +82,70 @@ class TheresaEason(Plugins):
             )
             result = await session.execute(stmt)
             rows = list(result.scalars().all())
-        context: list[dict] = []
+        lines: list[str] = []
         for row in reversed(rows):
             text = self._clean(row.msg)
             if not text or text.lower().startswith("eason"):
                 continue
-            context.append(
-                {
-                    "role": "assistant" if row.user_id == self.bot.bot_id else "user",
-                    "content": f"{row.user_nickname}({row.user_id}): {text}",
-                    "name": str(row.user_id),
-                }
-            )
-            if len(context) >= CONTEXT_LENGTH:
+            lines.append(f"{row.user_nickname}: {text}")
+            if len(lines) >= CONTEXT_LENGTH:
                 break
-        return context
+        return lines
 
-    def _enabled_tools(self) -> list[dict]:
-        """从配置 allowed_plugins 读取允许调用的插件，返回对应的工具定义"""
-        raw = self.config.get("allowed_plugins", "") if self.config else ""
-        allowed = [s.strip() for s in raw.split(",") if s.strip()]
-        return [entry["tool"] for name, entry in TOOL_REGISTRY.items() if name in allowed]
-
-    def _synthetic_event(self, message: str) -> GroupMessageEvent:
-        """构造一个模拟的群消息事件，驱动目标插件的 main"""
-        return GroupMessageEvent(
-            {
-                "post_type": "message",
-                "message_type": "group",
-                "group_id": self._last_group_id,
-                "user_id": self._last_user_id,
-                "message_id": -1,
-                "message": message,
-                "raw_message": message,
-                "sender": {
-                    "user_id": self._last_user_id,
-                    "nickname": self._last_nick,
-                    "card": "",
-                    "role": "",
-                },
-            }
-        )
-
-    async def _execute_plugin(self, plugin_name: str, ev_message: str) -> str:
-        """在群里执行目标插件（构造合成事件调用其 main），返回一句成功/失败反馈"""
-        inst = next((p for p in self.bot.plugins_list if p.name == plugin_name), None)
-        if inst is None:
-            return f"执行失败：插件 {plugin_name} 未加载"
-        try:
-            await inst.main(self._synthetic_event(ev_message), debug=False)
-        except Exception as e:
-            Log.error(f"插件{self.name} 调用 {plugin_name} 失败：{e}")
-            return f"执行失败:{e}"
-        return f"已完成（已在群里处理：{ev_message}）"
-
-    async def _run_tool(self, fn_name: str, arguments_json: str) -> str:
-        """根据 llm 发出的工具名 + 参数，执行对应插件，返回给 llm 的结果"""
-        for entry in TOOL_REGISTRY.values():
-            if entry["tool"]["function"]["name"] != fn_name:
+    @staticmethod
+    def _parse_opencode_output(raw: str) -> str:
+        """从 opencode `--format json`（PTY 下可能夹 ANSI）输出里提取最终文本回复"""
+        raw = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", raw)
+        texts: list[str] = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
                 continue
             try:
-                a = json.loads(arguments_json or "{}") or {}
+                obj = json.loads(line)
             except Exception:
-                a = {}
-            if fn_name == "show_persona" and not str(a.get("target", "")).strip():
-                a["target"] = str(self._last_user_id)  # 未指定目标 → 本人
-            msg = entry["build_event"](a)
-            return await self._execute_plugin(entry["plugin"], msg)
-        return f"未知工具:{fn_name}"
+                continue
+            part = obj.get("part") or {}
+            if part.get("type") == "text" and part.get("text"):
+                texts.append(part["text"])
+        return "\n".join(texts).strip()
 
-    async def _chat(self, messages: list[dict], tools: list[dict]) -> str:
-        """带工具调用的对话主循环；若无工具则退化为普通单轮对话"""
-        if not tools:
-            return await get_llm_response(messages, model="deepseek-v4-pro", thinking_enabled=False)
-        client = AsyncOpenAI(api_key=os.environ["DPSK_KEY"], base_url="https://api.deepseek.com")
-        Log.debug(
-            f"插件{self.name}：本次对话启用工具 {[t['function']['name'] for t in tools]}", True
+    def _run_opencode_blocking(self, prompt: str) -> str:
+        """在伪终端里跑 opencode（headless 需要 TTY 才能驱动），返回最终回复文本"""
+        shell_cmd = "opencode run --format json -m deepseek/deepseek-chat --auto " + shlex.quote(
+            prompt
         )
-        for _ in range(MAX_TOOL_TURNS):
-            response = await client.chat.completions.create(
-                model="deepseek-v4-pro",
-                messages=messages,
-                tools=tools,
-                temperature=0.7,
-                reasoning_effort="medium",
-                extra_body={"thinking": {"type": "disabled"}},
-            )
-            message = response.choices[0].message
-            if not message.tool_calls:
-                return message.content or "[NO REPLY]"
-            Log.debug(
-                f"插件{self.name}：llm 发起工具调用 "
-                + ", ".join(
-                    f"{t.function.name}({t.function.arguments})" for t in message.tool_calls
-                ),
-                True,
-            )
-            messages.append(message)
-            for tc in message.tool_calls:
-                result = await self._run_tool(tc.function.name, tc.function.arguments)
-                messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
-        return "[NO REPLY]"
+        proc = subprocess.run(
+            ["script", "-qec", shell_cmd, "/dev/null"],
+            cwd=os.getcwd(),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        out = proc.stdout or ""
+        parsed = self._parse_opencode_output(out)
+        if parsed:
+            return parsed
+        # 解析不到 json 时退回原始 stdout（去 ANSI）
+        return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", out).strip() or "[NO REPLY]"
+
+    async def _run_opencode(self, prompt: str) -> str:
+        return await asyncio.to_thread(self._run_opencode_blocking, prompt)
+
+    async def _fallback_chat(
+        self, context: list[str], text: str, group_id: int, user_id: int
+    ) -> str:
+        """opencode 不可用时的简单兜底：单次 deepseek（不带工具循环）"""
+        system = (
+            SYSTEM_HINT
+            + f"\n当前群号：{group_id}。若能承载就简短应答；无法调用工具时就直接文字回应。"
+        )
+        messages: list[dict] = [
+            {"role": "system", "content": system},
+            *[{"role": "user", "content": c} for c in context[-CONTEXT_LENGTH:]],
+            {"role": "user", "content": text},
+        ]
+        return await get_llm_response(messages, model="deepseek-v4-pro", thinking_enabled=False)
 
     @plugin_main(check_call_word=False, require_db=True)
     async def main(self, event: GroupMessageEvent, debug: bool):
@@ -260,30 +159,40 @@ class TheresaEason(Plugins):
         if not any(word in text for word in TRIGGER_WORDS):
             return
 
-        # 冷却，避免连续刷屏
         now = time.time()
         if now - self.group_cooldown.get(group_id, 0) < COOLDOWN_TIME:
             return
         self.group_cooldown[group_id] = now
 
-        Log.debug(f"插件{self.name}：群{group_id} 被消息「{text}」触发，准备与 llm 对话", debug)
-        self._last_group_id = group_id
-        self._last_user_id = event.user_id
-        self._last_nick = event.nickname or ""
+        Log.debug(f"插件{self.name}：群{group_id} 被消息「{text}」触发，转交 opencode", debug)
         try:
             context = await self._load_context(group_id)
-            messages: list[dict] = [{"role": "system", "content": SINGER_PERSONA}]
-            messages.extend(context)
-            messages.append({"role": "user", "content": text})
+            prompt = (
+                SYSTEM_HINT
+                + f"\n\n当前会话：群{group_id}（{event.group_name or ''}），时间 {time.strftime('%Y-%m-%d %H:%M')}，"
+                f"发消息的用户：{event.nickname or event.user_id}（QQ号 {event.user_id}）。\n"
+                + ("最近群聊内容：\n" + "\n".join(context) if context else "（暂无历史）")
+                + f"\n\n用户最新消息：{text}\n请给出你的回复。"
+            )
 
-            tools = self._enabled_tools()
-            response = await self._chat(messages, tools)
+            response = await self._run_opencode(prompt)
             if "[NO REPLY]" in response or not response.strip():
-                return
-            self.api.groupService.send_group_msg(group_id=group_id, message=response.strip())
+                response = await self._fallback_chat(context, text, group_id, event.user_id)
+                if "[NO REPLY]" in response or not response.strip():
+                    return
+            self.api.groupService.send_group_msg(group_id=group_id, message=response)
             Log.debug(f"插件{self.name}：群{group_id} 回复：「{response}」", debug)
         except Exception as e:
             Log.error(f"插件{self.name}运行时出错：{e}")
-            self.api.groupService.send_group_msg(
-                group_id=group_id, message=f"我嗓子卡壳了，待会儿再聊~（{e}）"
-            )
+            try:
+                fb = await self._fallback_chat(
+                    await self._load_context(group_id), text, group_id, event.user_id
+                )
+                if "[NO REPLY]" in fb or not fb.strip():
+                    return
+                self.api.groupService.send_group_msg(group_id=group_id, message=fb)
+            except Exception as e2:
+                Log.error(f"插件{self.name}兜底也失败：{e2}")
+                self.api.groupService.send_group_msg(
+                    group_id=group_id, message=f"我嗓子卡壳了，待会儿再聊~（{e}）"
+                )
