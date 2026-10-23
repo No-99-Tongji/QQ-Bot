@@ -148,9 +148,10 @@ class Bot:
             Log.warning("未设置助教群ID，跳过加载助教列表")
             return
 
-        assistants: list = self.api.groupService.get_group_member_list(
-            group_id=self.assistant_group
-        ).get("data")
+        assistants: list = (
+            self.api.groupService.get_group_member_list(group_id=self.assistant_group).get("data")
+            or []
+        )
         for member in assistants:
             self.assistant_list.add(member["user_id"])
 
