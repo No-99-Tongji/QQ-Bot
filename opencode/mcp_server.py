@@ -14,6 +14,7 @@
 import asyncio
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -216,7 +217,7 @@ async def _persona_text(target_id: int, nickname: str) -> str:
     conn = await asyncpg.connect(_db_dsn())
     try:
         rows = await conn.fetch(
-            "SELECT group_id, msg, user_nickname FROM messages "
+            "SELECT id, group_id, msg, user_nickname FROM messages "
             "WHERE user_id=$1 ORDER BY id DESC LIMIT 400",
             target_id,
         )
@@ -225,7 +226,11 @@ async def _persona_text(target_id: int, nickname: str) -> str:
     if not rows:
         return f"数据库暂无 [QQ:{target_id}] 的发言记录，无法生成画像。"
 
-    rows = list(reversed(rows))  # 时间正序
+    # 精简输入：最多 100 条发言原文，随机抽取后按时间正序
+    rows = list(rows)
+    if len(rows) > 100:
+        rows = random.sample(rows, 100)
+    rows.sort(key=lambda r: r["id"])
     group_count: dict[int, int] = {}
     for r in rows:
         group_count[r["group_id"]] = group_count.get(r["group_id"], 0) + 1
