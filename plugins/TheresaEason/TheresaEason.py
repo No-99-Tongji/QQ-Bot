@@ -112,12 +112,24 @@ class TheresaEason(Plugins):
 
     def _run_opencode_blocking(self, prompt: str) -> str:
         """在伪终端里跑 opencode（headless 需要 TTY 才能驱动），返回最终回复文本"""
-        shell_cmd = "opencode run --format json -m deepseek/deepseek-chat --auto " + shlex.quote(
-            prompt
+        opencode_bin = os.environ.get("OPENCODE_BIN", "/usr/local/bin/opencode")
+        shell_cmd = (
+            f"{opencode_bin} run --format json -m deepseek/deepseek-chat --auto "
+            + shlex.quote(prompt)
         )
+        # 把 bot 的 key / DB / OneBot 环境传给 opencode（其 MCP server 也要用）
+        env = dict(os.environ)
+        env.setdefault("DEEPSEEK_API_KEY", env.get("DPSK_KEY", ""))
+        env.setdefault("DB_USER", getattr(self.bot, "database_username", "theresa"))
+        env.setdefault("DB_ADDR", getattr(self.bot, "database_address", "localhost:5432"))
+        env.setdefault("DB_NAME", getattr(self.bot, "database_name", "bot"))
+        env.setdefault("DB_PASS", env.get("DB_PASS") or getattr(self.bot, "database_passwd", ""))
+        env.setdefault("ONEBOT_URL", f"http://{self.bot.server_address}")
+        env.setdefault("SONGS_DIR", "/opt/qq-bot/shared/plugins/TheresaSing/data/songs")
         proc = subprocess.run(
-            ["script", "-qec", shell_cmd, "/dev/null"],
+            ["/usr/bin/script", "-qec", shell_cmd, "/dev/null"],
             cwd=os.getcwd(),
+            env=env,
             capture_output=True,
             text=True,
             timeout=120,
