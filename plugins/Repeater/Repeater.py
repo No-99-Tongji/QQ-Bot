@@ -41,7 +41,7 @@ class Repeater(Plugins):
             self.message_latest[group_id] = message_newest
             self.counts[group_id] = 1
             return
-        if message_newest.startswith("Theresa"):
+        if message_newest.startswith("Eason"):
             return
 
         if message_newest == self.message_latest[group_id]:

@@ -16,7 +16,7 @@ class TheresaAI(Plugins):
     """
     插件名：TheresaAI \n
     插件类型：群聊插件 \n
-    插件功能：用户可以通过"<bot name> Theresa <问题内容>"的形式向远程大模型提问，支持文本提问\n
+    插件功能：用户可以通过"<bot name> Eason <问题内容>"的形式向远程大模型提问，支持文本提问\n
     """
 
     def __init__(self, server_address, bot):
@@ -26,7 +26,7 @@ class TheresaAI(Plugins):
         self.author = "Heai"
         self.introduction = """
                                 小特！
-                                usage: Theresa ask <提问内容>
+                                usage: Eason ask <提问内容>
                             """
         self.init_status()
 
@@ -36,12 +36,12 @@ class TheresaAI(Plugins):
         with open(os.path.join(os.path.dirname(__file__), "prompt.j2"), encoding="utf-8") as f:
             self.persona_template = Template(f.read())
 
-    @plugin_main(call_word=["Theresa ask"])
+    @plugin_main(call_word=["Eason ask"])
     async def main(self, event: GroupMessageEvent, debug: bool):
         message = event.message
 
         # 检查是否是纯ask命令
-        if message.strip() == "Theresa ask":
+        if message.strip() == "Eason ask":
             self.api.groupService.send_group_msg(
                 group_id=event.group_id, message="请输入你的问题哦"
             )
@@ -67,7 +67,7 @@ class TheresaAI(Plugins):
 
             # 提取问题内容
             # 删除CQ码
-            question = re.sub(r"\[.*?\]", "", message[len("Theresa ask") :]).strip()
+            question = re.sub(r"\[.*?\]", "", message[len("Eason ask") :]).strip()
 
             persona = self.persona_template.render(
                 owner_id=self.bot.owner_id,

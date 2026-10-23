@@ -14,11 +14,11 @@ class TheresaBan(Plugins):
         self.author = "Heai"
         self.introduction = """
                                 禁言，仅限管理员使用
-                                usage: Theresa ban <@> <禁言秒数>
+                                usage: Eason ban <@> <禁言秒数>
                             """
         self.init_status()
 
-    @plugin_main(call_word=["Theresa ban"])
+    @plugin_main(call_word=["Eason ban"])
     async def main(self, event: GroupMessageEvent, debug: bool):
         message = event.message
         command_list = message.split()

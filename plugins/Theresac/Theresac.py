@@ -14,11 +14,11 @@ class Theresac(Plugins):
         self.author = "Heai"
         self.introduction = """
                                 执行命令，仅限Bot主人使用
-                                usage: Theresac <命令>
+                                usage: Easonc <命令>
                             """
         self.init_status()
 
-    @plugin_main(check_group=False, call_word=["Theresac"])
+    @plugin_main(check_group=False, call_word=["Easonc"])
     async def main(self, event: GroupMessageEvent, debug: bool):
         message = unescape(event.message)
 

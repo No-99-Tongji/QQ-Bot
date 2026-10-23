@@ -121,7 +121,7 @@ class TheresaChat(Plugins):
             )
             return
 
-        if ("小特" not in clean_message) or ("Theresa" in clean_message):
+        if ("小特" not in clean_message) or ("Eason" in clean_message):
             if r < 0.01:
                 face_flag = True
             else:

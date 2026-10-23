@@ -29,7 +29,7 @@ class TheresaCard(Plugins):
         self.author = "Heai"
         self.introduction = """
                                 检查高程群名片格式\nkick: 踢出\ndebug: 不@\nstrict: 检查选课名单\nunenter: 检查未入群成员\n最后参数: 仅检查已入群>x小时
-                                usage: Theresa card (kick/debug) (strict) (unenter) (<小时数>)
+                                usage: Eason card (kick/debug) (strict) (unenter) (<小时数>)
                             """
 
         self.session_factory = sessionmaker(
@@ -61,7 +61,7 @@ class TheresaCard(Plugins):
 
         self.init_status()
 
-    @plugin_main(call_word=["Theresa card"], require_db=True)
+    @plugin_main(call_word=["Eason card"], require_db=True)
     async def main(self, event: GroupMessageEvent, debug: bool):
         # 可使用 kick
         permission_ids: list[int] = list(map(int, self.config.get("permission_ids").split(",")))

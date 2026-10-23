@@ -16,11 +16,11 @@ class TheresaHelp(Plugins):
         self.author = "Heai"
         self.introduction = """
                                 查看当前群聊启用的插件及说明，可选查询特定插件名
-                                usage: Theresa help (<插件名>)
+                                usage: Eason help (<插件名>)
                             """
         self.init_status()
 
-    @plugin_main(call_word=["Theresa help"])
+    @plugin_main(call_word=["Eason help"])
     async def main(self, event: GroupMessageEvent, debug: bool):
         group_id = event.group_id
         parts = event.message.split(" ")

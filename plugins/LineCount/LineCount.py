@@ -32,7 +32,7 @@ class LineCount(Plugins):
         self.author = "just monika / Heai"
         self.introduction = """
                                 获取自己本学期一共在高程作业网提交了多少行代码
-                                usage: Theresa linecount
+                                usage: Eason linecount
                             """
         self.init_status()
         self.semester_dict = {
@@ -48,7 +48,7 @@ class LineCount(Plugins):
             bind=self.bot.database, class_=AsyncSession, expire_on_commit=False
         )
 
-    @plugin_main(call_word=["Theresa linecount"], require_db=True)
+    @plugin_main(call_word=["Eason linecount"], require_db=True)
     async def main(self, event: GroupMessageEvent, debug: bool):
         group_id = event.group_id
         user_id = event.user_id

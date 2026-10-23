@@ -23,14 +23,14 @@ class TheresaGoodMorning(Plugins):
         self.author = "Heai"
         self.introduction = """
                                 早安/晚安小特
-                                usage: Theresa 早安/晚安
+                                usage: Eason 早安/晚安
                             """
         self.init_status()
 
         self.user_cooldown = {}  # 用户冷却时间记录字典
         self.cooldown_time = 1  # 冷却时间（秒）
 
-    @plugin_main(call_word=["Theresa 晚安", "Theresa 早安"])
+    @plugin_main(call_word=["Eason 晚安", "Eason 早安"])
     async def main(self, event: GroupMessageEvent, debug: bool):
         message = event.message
 
@@ -52,7 +52,7 @@ class TheresaGoodMorning(Plugins):
 
             # 提取问题内容
             # 删除CQ码
-            question = re.sub(r"\[.*?\]", "", message[len("Theresa ") :]).strip()
+            question = re.sub(r"\[.*?\]", "", message[len("Eason ") :]).strip()
 
             persona = f"""
 # 你的任务是为用户提供早安/晚安问候。
@@ -75,7 +75,7 @@ class TheresaGoodMorning(Plugins):
             # 发送回复到群聊
             reply_message = Reply(id=event.message_id) + response
             self.api.groupService.send_group_msg(group_id=event.group_id, message=reply_message)
-            if message.startswith("Theresa 晚安"):
+            if message.startswith("Eason 晚安"):
                 self.api.groupService.set_group_ban(
                     group_id=event.group_id,
                     user_id=event.user_id,

@@ -32,7 +32,7 @@ class QiuDao(Plugins):
         self.author = "just monika / Heai"
         self.introduction = """
                                 根据高程期末考试成绩发送对应的表情
-                                usage: Theresa 求刀/公开我的期末成绩吧
+                                usage: Eason 求刀/公开我的期末成绩吧
                             """
         self.init_status()
         self.semester_dict = {
@@ -46,11 +46,11 @@ class QiuDao(Plugins):
             bind=self.bot.database, class_=AsyncSession, expire_on_commit=False
         )
 
-    @plugin_main(call_word=["Theresa 求刀", "Theresa 公开我的期末成绩吧"], require_db=True)
+    @plugin_main(call_word=["Eason 求刀", "Eason 公开我的期末成绩吧"], require_db=True)
     async def main(self, event: GroupMessageEvent, debug: bool):
         group_id = event.group_id
 
-        old_callword = "Theresa 求刀"
+        old_callword = "Eason 求刀"
         old_group_list = [783564589]
         if (event.message == old_callword) and (group_id not in old_group_list):
             return
