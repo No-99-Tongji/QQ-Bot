@@ -1,3 +1,4 @@
+# ruff: noqa: E402 — 需先注入仓库根到 sys.path 才能 import 后端模块
 """MCP server：把后端能力（唱歌、人物画像）以工具形式暴露给 opencode。
 
 - sing_song: 点歌/唱歌 —— 本地曲库直接发语音，否则走网易云判断（是陈奕迅→给分享链接，不是→说明真实歌手）
@@ -14,8 +15,15 @@ import asyncio
 import json
 import os
 import re
+import sys
 import time
 from urllib.parse import urljoin
+
+# opencode 起的 MCP 子进程工作目录不一定是仓库根；自行把仓库根加进 sys.path
+_HERE = os.path.dirname(os.path.abspath(__file__))  # .../opencode
+_ROOT = os.path.dirname(_HERE)  # 仓库根（release 根），含 plugins/、utils/
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 import asyncpg
 import requests
