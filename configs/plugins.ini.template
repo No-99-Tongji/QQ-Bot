@@ -64,6 +64,9 @@ enable = True
 [TheresaEason]
 enable = True
 
+[TheresaSing]
+enable = True
+
 [TheresaDora]
 enable = False
 
