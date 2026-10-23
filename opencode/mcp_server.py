@@ -227,8 +227,8 @@ def _resolve_target(group_id: int, target: str) -> tuple[int | None, str | None]
     return None, target
 
 
-async def _persona_text(target_id: int, nickname: str) -> str:
-    """查库 + LLM，生成人格画像文字（隐私：不披露群名/活跃群）"""
+async def _fetch_sampled_messages(target_id: int, max_: int = 100) -> list[dict]:
+    """取某人的发言：最多 max_ 条，随机抽后按时间正序；带 id/group_id/msg/user_nickname"""
     conn = await asyncpg.connect(_db_dsn())
     try:
         rows = await conn.fetch(
@@ -239,13 +239,20 @@ async def _persona_text(target_id: int, nickname: str) -> str:
     finally:
         await conn.close()
     if not rows:
+        return []
+    rows = list(rows)
+    if len(rows) > max_:
+        rows = random.sample(rows, max_)
+    rows.sort(key=lambda r: r["id"])
+    return rows
+
+
+async def _persona_text(target_id: int, nickname: str) -> str:
+    """查库 + LLM，生成人格画像文字（隐私：不披露群名/活跃群）"""
+    rows = await _fetch_sampled_messages(target_id, max_=100)
+    if not rows:
         return f"数据库暂无 [QQ:{target_id}] 的发言记录，无法生成画像。"
 
-    # 精简输入：最多 100 条发言原文，随机抽取后按时间正序
-    rows = list(rows)
-    if len(rows) > 100:
-        rows = random.sample(rows, 100)
-    rows.sort(key=lambda r: r["id"])
     group_count: dict[int, int] = {}
     for r in rows:
         group_count[r["group_id"]] = group_count.get(r["group_id"], 0) + 1
@@ -334,6 +341,43 @@ async def _persona_impl(group_id: int, target: str) -> str:
     if qq is None:
         return f"在当前群没找到名为「{unresolved}」的成员。"
     return await _persona_text(qq, target)
+
+
+async def _user_messages_impl(group_id: int, target: str, limit: int = 100) -> str:
+    """取某人的最近（随机抽取）聊天记录，供补充/确认这个人的信息用"""
+    if not target or not str(target).strip():
+        return "请指定要查的人（QQ号或群名片/昵称）。"
+    target = str(target).strip()
+    qq, unresolved = _resolve_target(group_id, target)
+    if qq is None:
+        return f"在当前群没找到名为「{unresolved}」的成员。"
+    limit = max(1, min(int(limit), 200))
+    rows = await _fetch_sampled_messages(qq, max_=limit)
+    if not rows:
+        return f"数据库暂无 [QQ:{qq}] 的发言记录。"
+    groups = sorted({r["group_id"] for r in rows})
+    label = {gid: "群" + chr(ord("A") + i) for i, gid in enumerate(groups)}
+    nickname = rows[-1]["user_nickname"] or f"QQ:{qq}"
+    lines = []
+    for r in rows:
+        text = _strip_cq(r["msg"])
+        if not text or text.lower().startswith("eason"):
+            continue
+        lines.append(f"[{label[r['group_id']]}] {r['user_nickname']}: {text}")
+    if not lines:
+        return f"[QQ:{qq}]（{nickname}）没有可显示的发言记录。"
+    return f"《{nickname}（QQ:{qq}）》最近发言（随机{len(lines)}条，群名已匿名）：\n" + "\n".join(
+        lines
+    )
+
+
+@mcp.tool()
+async def get_user_messages(group_id: int, target: str, limit: int = 100) -> str:
+    """获取某人的聊天记录。用于某些场景需要补充/确认这个人的信息、了解TA说过什么时调用。
+    参数 target 是QQ号或群名片/昵称，group_id 是当前群号，limit 是返回条数上限。"""
+    return await _call_tool(
+        "get_user_messages", group_id, _user_messages_impl, target=target, limit=limit
+    )
 
 
 if __name__ == "__main__":
