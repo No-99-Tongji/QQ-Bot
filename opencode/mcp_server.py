@@ -10,8 +10,11 @@
 - 通过环境变量取配置；依赖 bot 进程已有的 DPSK_KEY / DB / 网易云 / OneBot 服务。
 """
 
+import asyncio
+import json
 import os
 import re
+import time
 from urllib.parse import urljoin
 
 import asyncpg
@@ -24,6 +27,25 @@ from utils.AITools import get_llm_response
 mcp = FastMCP("qq-bot-bridge")
 
 ONEBOT = os.environ.get("ONEBOT_URL", "http://127.0.0.1:5700")
+
+# 每次工具调用的耗时/结果日志，便于定位慢的工具
+TIMING_LOG = os.environ.get("MCP_TIMING_LOG", "/opt/qq-bot/shared/opencode_mcp_timing.log")
+
+
+def _log_tool(name: str, dur_s: float, ok: bool, **extra) -> None:
+    try:
+        rec = {
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "tool": name,
+            "dur_s": round(dur_s, 3),
+            "ok": ok,
+        }
+        rec.update(extra)
+        with open(TIMING_LOG, "a", encoding="utf8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
 
 # 画像不再总结活跃群，也不披露真实群名/群号
 PERSONA_DIRECTIONS = [
@@ -95,9 +117,42 @@ def _send_record(group_id: int, path: str) -> None:
     )
 
 
+async def _call_tool(name: str, group_id: int, impl, **args) -> str:
+    """执行工具实现并记录每次调用耗时/结果到日志"""
+    t0 = time.time()
+    try:
+        r = impl(group_id=group_id, **args)
+        if asyncio.iscoroutine(r):
+            r = await r
+        _log_tool(
+            name,
+            time.time() - t0,
+            True,
+            group_id=group_id,
+            args={k: v for k, v in args.items()},
+            res_head=(str(r)[:60] or ""),
+        )
+        return r
+    except Exception as e:
+        _log_tool(
+            name,
+            time.time() - t0,
+            False,
+            group_id=group_id,
+            args={k: v for k, v in args.items()},
+            err=str(e)[:80],
+        )
+        raise
+
+
 @mcp.tool()
-def sing_song(group_id: int, song: str) -> str:
+async def sing_song(group_id: int, song: str) -> str:
     """让 bot 唱歌/点歌。参数 song 是歌名或点歌关键词，group_id 是当前群号。"""
+    return await _call_tool("sing_song", group_id, _sing_impl, song=song)
+
+
+def _sing_impl(group_id: int, song: str) -> str:
+    """让 bot 唱歌/点歌。"""
     path = _find_local_song(song)
     if path is not None:
         try:
@@ -212,6 +267,11 @@ async def _persona_text(target_id: int, nickname: str) -> str:
 @mcp.tool()
 async def show_persona(group_id: int, target: str) -> str:
     """生成某个用户在群聊里的画像/人格总结。target 是QQ号或群名片/昵称，group_id 是当前群号。"""
+    return await _call_tool("show_persona", group_id, _persona_impl, target=target)
+
+
+async def _persona_impl(group_id: int, target: str) -> str:
+    """生成某个用户在群聊里的画像/人格总结。"""
     if not target or not str(target).strip():
         return "请指定要画像的人（QQ号或群名片/昵称）。"
     target = str(target).strip()
