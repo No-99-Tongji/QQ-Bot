@@ -294,8 +294,35 @@ async def _persona_text(target_id: int, nickname: str) -> str:
 
 @mcp.tool()
 async def show_persona(group_id: int, target: str) -> str:
-    """生成某个用户在群聊里的画像/人格总结。target 是QQ号或群名片/昵称，group_id 是当前群号。"""
-    return await _call_tool("show_persona", group_id, _persona_impl, target=target)
+    """生成某人的画像并直接原样发送到群里（避免 opencode 二次概括/改写）。"""
+    t0 = time.time()
+    try:
+        text = await _persona_impl(group_id, target)
+        try:
+            _onebot_post("send_group_msg", {"group_id": group_id, "message": text})
+            res = "画像已原样发送到群里，你无需再复述或概括内容，简短确认即可。"
+        except Exception as e:
+            res = f"画像已生成但发到群里失败（{e}）。请把下面这段一字不改完整原样发出：\n{text}"
+        _log_tool(
+            "show_persona",
+            time.time() - t0,
+            True,
+            group_id=group_id,
+            args={"target": target},
+            res_head=(str(text)[:50] or ""),
+            posted=("发到群里" if "失败" not in res else "返回全文"),
+        )
+        return res
+    except Exception as e:
+        _log_tool(
+            "show_persona",
+            time.time() - t0,
+            False,
+            group_id=group_id,
+            args={"target": target},
+            err=str(e)[:80],
+        )
+        raise
 
 
 async def _persona_impl(group_id: int, target: str) -> str:
