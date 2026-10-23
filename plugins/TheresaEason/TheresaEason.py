@@ -3,6 +3,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import time
 
@@ -27,12 +28,12 @@ CONTEXT_LENGTH = 10
 SYSTEM_HINT = (
     "你是QQ群里的 bot「逸浔/小逸」，一个热爱陈奕迅的歌手，会唱很多陈奕迅的歌。\n"
     "规则：\n"
-    "1. 回复必须非常简短，两三句话以内，亲切随性，可用陈奕迅歌词/提到他的歌。\n"
+    "1. 回复必须非常简短，一两句话即可，亲切随性，可用陈奕迅歌词/提到他的歌。\n"
     "2. 只有当用户明确要求唱歌/点歌/播放时才调用 sing_song 工具；"
     "只有当用户明确要求看某人的画像/人格时才调用 show_persona 工具。"
     "只是聊天/问歌名/考歌/纠正时不要调用工具。\n"
-    "3. 调用工具后等待结果，再依结果简短回应；不要假装已经做了而实际没调用工具。\n"
-    "4. 不要用 markdown。"
+    "3. 每个请求最多调用一次工具。调用后立即基于结果简短回应，不要再做额外步骤或补话。\n"
+    "4. 不要假装已经做了而实际没调用工具；不要用 markdown。"
 )
 
 
@@ -126,19 +127,32 @@ class TheresaEason(Plugins):
         env.setdefault("DB_PASS", env.get("DB_PASS") or getattr(self.bot, "database_passwd", ""))
         env.setdefault("ONEBOT_URL", f"http://{self.bot.server_address}")
         env.setdefault("SONGS_DIR", "/opt/qq-bot/shared/plugins/TheresaSing/data/songs")
-        proc = subprocess.run(
+        start = time.time()
+        # 用独立的进程组，便于超时时把 opencode 及其脚本一起杀掉，避免孤儿进程堆积
+        proc = subprocess.Popen(
             ["/usr/bin/script", "-qec", shell_cmd, "/dev/null"],
             cwd=os.getcwd(),
             env=env,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=120,
+            start_new_session=True,
         )
-        out = proc.stdout or ""
+        try:
+            out, _ = proc.communicate(timeout=240)
+        except subprocess.TimeoutExpired:
+            Log.error(f"插件{self.name}：opencode 超时(>{240}s)，已终止进程组")
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+            proc.wait()
+            raise TimeoutError("opencode 处理超时") from None
+        Log.debug(f"插件{self.name}：opencode 本次耗时 {int(time.time() - start)}s", True)
+        out = out or ""
         parsed = self._parse_opencode_output(out)
         if parsed:
             return parsed
-        # 解析不到 json 时退回原始 stdout（去 ANSI）
         return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", out).strip() or "[NO REPLY]"
 
     async def _run_opencode(self, prompt: str) -> str:
@@ -187,11 +201,12 @@ class TheresaEason(Plugins):
                 + f"\n\n用户最新消息：{text}\n请给出你的回复。"
             )
 
+            self.api.groupService.send_group_msg(group_id=group_id, message="收到，我酝酿一下~")
             response = await self._run_opencode(prompt)
             if "[NO REPLY]" in response or not response.strip():
                 response = await self._fallback_chat(context, text, group_id, event.user_id)
                 if "[NO REPLY]" in response or not response.strip():
-                    return
+                    response = "我这会儿有点卡，你稍等再来找我呀~"
             self.api.groupService.send_group_msg(group_id=group_id, message=response)
             Log.debug(f"插件{self.name}：群{group_id} 回复：「{response}」", debug)
         except Exception as e:
@@ -201,10 +216,10 @@ class TheresaEason(Plugins):
                     await self._load_context(group_id), text, group_id, event.user_id
                 )
                 if "[NO REPLY]" in fb or not fb.strip():
-                    return
+                    fb = "刚刚想事情走神了，要不你再和我说一遍？"
                 self.api.groupService.send_group_msg(group_id=group_id, message=fb)
             except Exception as e2:
                 Log.error(f"插件{self.name}兜底也失败：{e2}")
                 self.api.groupService.send_group_msg(
-                    group_id=group_id, message=f"我嗓子卡壳了，待会儿再聊~（{e}）"
+                    group_id=group_id, message="我嗓子卡壳了，待会儿再聊~"
                 )
