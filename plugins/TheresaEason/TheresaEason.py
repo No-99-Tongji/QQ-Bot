@@ -35,8 +35,9 @@ TOOL_REGISTRY = {
             "function": {
                 "name": "sing_song",
                 "description": (
-                    "让 bot 唱歌/播放某首歌。当用户让小逸/逸浔唱某首歌时调用。"
-                    "参数 song 是要唱的歌名或点歌关键词。"
+                    "真正播放某首歌（发语音）。只有当用户明确发出唱/点歌/播放的指令时才"
+                    "调用，例如'唱首浮夸''点歌''放一首X'。若用户只是在问歌名、考歌、"
+                    "讨论歌词或纠正你，绝对不要调用此工具，直接用文字回答。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -54,9 +55,9 @@ TOOL_REGISTRY = {
             "function": {
                 "name": "show_persona",
                 "description": (
-                    "展示某个 QQ 用户的群聊人格画像（基于TA的历史发言总结）。"
-                    "当用户让小逸/逸浔看看某人的人格/画像/为人/是什么样的人时调用。"
-                    "参数 target 是QQ号或群名片/昵称，留空表示查看发消息的本人。"
+                    "展示某个 QQ 用户的群聊人格画像（基于TA的历史发言总结）。只有当用户明确"
+                    "要求查看某人的人格/画像/为人/介绍时才调用。若不知目标QQ或身份，"
+                    "先向用户询问是谁，不要凭空编造画像。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -82,12 +83,17 @@ TOOL_REGISTRY = {
 SINGER_PERSONA = (
     "你是一个热爱陈奕迅（Eason Chan）的歌手，会唱很多陈奕迅的歌，像《十年》《浮夸》"
     "《富士山下》《K歌之王》《单车》《好久不见》这些张口就来。"
-    "你在和朋友们的 QQ 群里。"
-    "要求：\n"
-    "1. 每次回复都必须非常简短，两三句话以内。\n"
-    "2. 可以自然地引用陈奕迅的歌词或提到他的歌来回应。\n"
-    "3. 语气亲切、随性，像个爱唱歌的朋友/歌手，不要说教。\n"
-    "4. 不要使用 markdown，不要寒暄，直接回应内容。"
+    "你在和朋友们的 QQ 群里。\n"
+    "关于工具：\n"
+    "1. 只有在用户明确要求你唱歌/点歌/播放某首歌时，才调用 sing_song 工具真正播放。\n"
+    "2. 只有在用户明确要求查看某个人的画像/人格/介绍时，才调用 show_persona 工具。\n"
+    "3. 如果用户只是在聊天、问歌名、考你歌、纠正你、讨论歌词，绝不要调用唱歌工具。\n"
+    "4. 当你调用了工具，就等待工具结果，再依据结果简短回应。绝不要用文字假装你已经"
+    "唱了或介绍了——除非你真的调用了工具并等到成功。\n"
+    "回复要求：\n"
+    "- 每次回复都非常简短，两三句话以内。\n"
+    "- 可以自然引用陈奕迅的歌词或提到他的歌。\n"
+    "- 语气亲切、随性，像个爱唱歌的朋友，不要说教，不要用 markdown。"
 )
 
 
@@ -207,18 +213,28 @@ class TheresaEason(Plugins):
         if not tools:
             return await get_llm_response(messages, model="deepseek-v4-pro", thinking_enabled=False)
         client = AsyncOpenAI(api_key=os.environ["DPSK_KEY"], base_url="https://api.deepseek.com")
+        Log.debug(
+            f"插件{self.name}：本次对话启用工具 {[t['function']['name'] for t in tools]}", True
+        )
         for _ in range(MAX_TOOL_TURNS):
             response = await client.chat.completions.create(
                 model="deepseek-v4-pro",
                 messages=messages,
                 tools=tools,
-                temperature=1.0,
+                temperature=0.7,
                 reasoning_effort="medium",
                 extra_body={"thinking": {"type": "disabled"}},
             )
             message = response.choices[0].message
             if not message.tool_calls:
                 return message.content or "[NO REPLY]"
+            Log.debug(
+                f"插件{self.name}：llm 发起工具调用 "
+                + ", ".join(
+                    f"{t.function.name}({t.function.arguments})" for t in message.tool_calls
+                ),
+                True,
+            )
             messages.append(message)
             for tc in message.tool_calls:
                 result = await self._run_tool(tc.function.name, tc.function.arguments)
