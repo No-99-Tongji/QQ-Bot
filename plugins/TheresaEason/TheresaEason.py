@@ -15,6 +15,7 @@ from plugins import Plugins, plugin_main
 from src.event_handler.GroupMessageEventHandler import GroupMessageEvent
 from src.PrintLog import Log
 from utils.AITools import get_llm_response
+from utils.CQHelper import CQHelper
 
 Base = declarative_base()
 
@@ -29,8 +30,8 @@ SYSTEM_HINT = (
     "你是QQ群里的 bot「逸浔/小逸」，一个热爱陈奕迅的歌手，会唱很多陈奕迅的歌。\n"
     "规则：\n"
     "1. 回复必须非常简短，一两句话即可，亲切随性，可用陈奕迅歌词/提到他的歌。\n"
-    "2. 只有当用户明确要求唱歌/点歌/播放时才调用 sing_song 工具；"
-    "只有当用户明确要求看某人的画像/人格时才调用 show_persona 工具。"
+    "2. 用户要求唱歌/点歌/播放时，必须调用 sing_song 工具真正播放（歌名要从我给你的'可唱歌曲'里挑一个），"
+    "绝不能只口头说'来一首/这就唱'而不调用工具。用户要求看某人的画像/人格时调用 show_persona。"
     "只是聊天/问歌名/考歌/纠正时不要调用工具。\n"
     "3. 每个请求最多调用一次工具。调用后立即基于结果简短回应，不要再做额外步骤或补话。\n"
     "4. 不要假装已经做了而实际没调用工具；不要用 markdown。"
@@ -92,6 +93,27 @@ class TheresaEason(Plugins):
             if len(lines) >= CONTEXT_LENGTH:
                 break
         return lines
+
+    @staticmethod
+    def _extract_at(message: str) -> tuple[int | None, str | None]:
+        """从触发消息里提取被 @ 的 (QQ号, 名字)，无则 None"""
+        for cq in CQHelper.loads_cq(message):
+            qq = getattr(cq, "qq", "")
+            if cq.cq_type == "at" and str(qq).isdigit():
+                return int(qq), getattr(cq, "name", "") or str(qq)
+        # 也接受纯文本 "@名字" 的常见写法
+        m = re.search(r"@([^\s@，。？！：:]+)", message)
+        if m:
+            return None, m.group(1)
+        return None, None
+
+    @staticmethod
+    def _available_song_names() -> list[str]:
+        """本机曲库可唱的歌名（从共享数据目录读取）"""
+        d = "/opt/qq-bot/shared/plugins/TheresaSing/data/songs"
+        if not os.path.isdir(d):
+            return []
+        return sorted(os.path.splitext(f)[0] for f in os.listdir(d) if f.lower().endswith(".mp3"))
 
     @staticmethod
     def _parse_opencode_output(raw: str) -> str:
@@ -191,8 +213,26 @@ class TheresaEason(Plugins):
         Log.debug(f"插件{self.name}：群{group_id} 被消息「{text}」触发，转交 opencode", debug)
         try:
             context = await self._load_context(group_id)
+            at_qq, at_name = self._extract_at(event.message)
+            at_line = ""
+            if at_qq:
+                at_line = (
+                    f"\n本条消息@了用户：{at_name or at_qq}（QQ号 {at_qq}）。"
+                    f"若用户要分析其画像/人格，请把 show_persona 的 target 填 {at_qq}。"
+                )
+            elif at_name:
+                at_line = f"\n用户提到的目标名字：{at_name}（可尝试用 show_persona 的 target 填入该名字）。"
+            song_names = self._available_song_names()
+            songs_line = (
+                f"\n我能唱的歌曲（调用 sing_song 时，song 请取其中之一）：{'、'.join(song_names)}。"
+                if song_names
+                else ""
+            )
+
             prompt = (
                 SYSTEM_HINT
+                + at_line
+                + songs_line
                 + f"\n\n当前会话：群{group_id}（{event.group_name or ''}），时间 {time.strftime('%Y-%m-%d %H:%M')}，"
                 f"发消息的用户：{event.nickname or event.user_id}（QQ号 {event.user_id}）。\n"
                 + ("最近群聊内容：\n" + "\n".join(context) if context else "（暂无历史）")

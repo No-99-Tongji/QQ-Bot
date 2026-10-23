@@ -170,6 +170,21 @@ def _sing_impl(group_id: int, song: str) -> str:
             return f"本地点歌失败：{e}"
         return f"已在群里播放《{os.path.basename(path).rsplit('.', 1)[0]}》"
 
+    # 模糊/随意的点歌（"随便唱一首""挑你喜欢的"）→ 随机挑一首本地歌，保证真的放出来
+    if any(
+        k in song
+        for k in ("随便", "任意", "随意", "挑一首", "来一首", "你喜欢", "你喜欢的", "什么歌都行")
+    ):
+        d = _songs_dir()
+        local = [f for f in os.listdir(d) if f.lower().endswith(".mp3")] if os.path.isdir(d) else []
+        if local:
+            chosen = os.path.join(d, random.choice(local))
+            try:
+                _send_record(group_id, chosen)
+            except Exception as e:
+                return f"本地点歌失败：{e}"
+            return f"随机唱首《{os.path.basename(chosen).rsplit('.', 1)[0]}》给你~"
+
     try:
         results = search_music(song, {}, limit=5)
     except Exception as e:
