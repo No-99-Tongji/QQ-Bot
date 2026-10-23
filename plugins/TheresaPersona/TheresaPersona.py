@@ -153,7 +153,8 @@ class TheresaPersona(Plugins):
             nickname = ""
             for row in reversed(rows):
                 text = self._strip_cq(row.msg)
-                if not text:
+                if not text or text.lower().startswith("eason"):
+                    # 跳过空消息和 Eason 指令（如 Eason sing/persona/card/help）
                     continue
                 line = f"[{group_label[row.group_id]}] {row.user_nickname}({row.user_id}): {text}"
                 used += len(line) + 1

@@ -136,24 +136,31 @@ class TheresaEason(Plugins):
         return re.sub(r"\[CQ:[^\]]*\]", "", message).strip()
 
     async def _load_context(self, group_id: int) -> list[dict]:
-        """拉取该群最近的聊天上下文（排好序的正序消息）"""
+        """拉取该群最近的聊天上下文（正序）；跳过以 Eason 开头的 bot 指令"""
         async with self.session_factory() as session:
             stmt = (
                 select(Message)
                 .where(Message.group_id == group_id)
                 .order_by(desc(Message.id))
-                .limit(CONTEXT_LENGTH)
+                .limit(CONTEXT_LENGTH * 2)
             )
             result = await session.execute(stmt)
             rows = list(result.scalars().all())
-        return [
-            {
-                "role": "assistant" if row.user_id == self.bot.bot_id else "user",
-                "content": f"{row.user_nickname}({row.user_id}): {self._clean(row.msg)}",
-                "name": str(row.user_id),
-            }
-            for row in reversed(rows)
-        ]
+        context: list[dict] = []
+        for row in reversed(rows):
+            text = self._clean(row.msg)
+            if not text or text.lower().startswith("eason"):
+                continue
+            context.append(
+                {
+                    "role": "assistant" if row.user_id == self.bot.bot_id else "user",
+                    "content": f"{row.user_nickname}({row.user_id}): {text}",
+                    "name": str(row.user_id),
+                }
+            )
+            if len(context) >= CONTEXT_LENGTH:
+                break
+        return context
 
     def _enabled_tools(self) -> list[dict]:
         """从配置 allowed_plugins 读取允许调用的插件，返回对应的工具定义"""
