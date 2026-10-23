@@ -63,6 +63,7 @@ enable = True
 
 [TheresaEason]
 enable = True
+allowed_plugins = sing,persona
 
 [TheresaSing]
 enable = True
