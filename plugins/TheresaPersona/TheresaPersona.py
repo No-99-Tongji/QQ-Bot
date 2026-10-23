@@ -26,7 +26,7 @@ ANALYSIS_DIRECTIONS = (
     "身份/出身（职业、专业、在校学生身份等）",
     "是哪里人（从口音、提到的地名、生活习惯推断）",
     "口头禅（反复出现的高频用语）",
-    "在哪些群聊里活跃（及活跃程度、在群里的角色）",
+    "在多少个群聊里活跃（只按匿名群标签描述数量和活跃程度，绝不披露真实群名或群号）",
     "常与谁互动、社会关系",
     "作息规律",
     "常用的语气、表情、网络用语",
@@ -99,14 +99,6 @@ class TheresaPersona(Plugins):
                 return int(mem["user_id"]), None
         return None, name
 
-    def _group_name(self, group_id: int) -> str:
-        """获取群名，失败则退回群号"""
-        try:
-            data = self.api.groupService.get_group_info(group_id=group_id).get("data") or {}
-            return data.get("group_name") or str(group_id)
-        except Exception:
-            return str(group_id)
-
     @plugin_main(call_word=["Eason persona"], require_db=True)
     async def main(self, event: GroupMessageEvent, debug: bool):
         target_id, unresolved_name = self._resolve_target(event)
@@ -149,6 +141,12 @@ class TheresaPersona(Plugins):
             for row in rows:
                 group_count[row.group_id] += 1
 
+            # 按活跃度把群打成匿名标签（群A/群B...），不披露真实群名或群号
+            ordered_groups = sorted(group_count.items(), key=lambda kv: kv[1], reverse=True)
+            group_label: dict[int, str] = {
+                gid: "群" + chr(ord("A") + i) for i, (gid, _) in enumerate(ordered_groups)
+            }
+
             # 组装正序 transcript，控制在字符预算内（超出则只保留最近的）
             transcript_lines = []
             used = 0
@@ -157,7 +155,7 @@ class TheresaPersona(Plugins):
                 text = self._strip_cq(row.msg)
                 if not text:
                     continue
-                line = f"[群 {row.group_id}] {row.user_nickname}({row.user_id}): {text}"
+                line = f"[{group_label[row.group_id]}] {row.user_nickname}({row.user_id}): {text}"
                 used += len(line) + 1
                 if used > CHAR_BUDGET:
                     break
@@ -166,10 +164,9 @@ class TheresaPersona(Plugins):
             if rows and not nickname:
                 nickname = rows[-1].user_nickname
 
-            # 活跃群排名 + 群名映射
-            ordered_groups = sorted(group_count.items(), key=lambda kv: kv[1], reverse=True)
+            # 活跃群排行：只用匿名标签，不含真实群名/群号
             active_groups_desc = "、".join(
-                f"{self._group_name(gid)}（群{gid}，{cnt}条）" for gid, cnt in ordered_groups
+                f"{group_label[gid]}（{cnt}条）" for gid, cnt in ordered_groups
             )
 
             directions_txt = "\n".join(f"- {d}" for d in ANALYSIS_DIRECTIONS)
@@ -180,7 +177,9 @@ class TheresaPersona(Plugins):
                 "1. 只能依据给定材料推断，不要编造材料中没有的信息；信息不足的维度明确说明'暂无法判断'。\n"
                 "2. 分点输出，覆盖但不限于以下方向：\n"
                 f"{directions_txt}\n"
-                "3. 用中文、口语化、有条理地输出，开头不必寒暄，直接给出分析正文。"
+                "3. 绝不披露任何真实群名、群号或能定位到具体群的细节（含群名片、群成员结构）；"
+                "提到活跃群时只用匿名标签（如'群A'、'群B'）。\n"
+                "4. 用中文、口语化、有条理地输出，开头不必寒暄，直接给出分析正文。"
             )
             user_prompt = (
                 f"以下是用户在 [QQ:{target_id}]（{nickname}）近期的群聊发言摘录，按时间顺序排列。\n\n"
