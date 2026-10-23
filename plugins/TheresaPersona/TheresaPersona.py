@@ -66,15 +66,38 @@ class TheresaPersona(Plugins):
         """去掉消息里的 CQ 码（at/image/face 等），只保留纯文本"""
         return re.sub(r"\[CQ:[^\]]*\]", "", message).strip()
 
-    @staticmethod
-    def _extract_at_qq(message: str) -> int | None:
-        """从触发消息里解析出被 @ 的 QQ 号"""
-        for cq in CQHelper.loads_cq(message):
-            if cq.cq_type == "at":
-                qq = cq.qq
-                if qq.isdigit():
-                    return int(qq)
-        return None
+    def _resolve_target(self, event: GroupMessageEvent) -> tuple[int | None, str | None]:
+        """解析触发消息里被 @ 的目标，返回 (QQ号, 未解析到的名字)。
+
+        优先匹配 [CQ:at,qq=xxx] 段；若 @ 以纯文本形式到达（如 @小四），
+        则从文字里抓出 `@名字` 并对照当前群成员列表（群名片/昵称）解析出 QQ 号。
+        """
+        # 1) 标准 CQ at 段
+        for cq in CQHelper.loads_cq(event.message):
+            if cq.cq_type == "at" and cq.qq.isdigit():
+                return int(cq.qq), None
+
+        # 2) 纯文本 @名字，结合当前群成员列表解析
+        rest = event.message[len(self.bot.bot_name + " persona") :]
+        m = re.search(r"@([^\s@，。？！：:]+)", rest)
+        if not m:
+            return None, None
+        name = m.group(1)
+        try:
+            members = (
+                self.api.groupService.get_group_member_list(group_id=event.group_id).get("data")
+                or []
+            )
+        except Exception:
+            members = []
+        for mem in members:
+            if (
+                mem.get("card") == name
+                or mem.get("nickname") == name
+                or mem.get("card_or_nickname") == name
+            ):
+                return int(mem["user_id"]), None
+        return None, name
 
     def _group_name(self, group_id: int) -> str:
         """获取群名，失败则退回群号"""
@@ -86,12 +109,15 @@ class TheresaPersona(Plugins):
 
     @plugin_main(call_word=["Eason persona"], require_db=True)
     async def main(self, event: GroupMessageEvent, debug: bool):
-        target_id = self._extract_at_qq(event.message)
+        target_id, unresolved_name = self._resolve_target(event)
 
         if target_id is None:
+            if unresolved_name:
+                tip = f"在群里没找到名为「{unresolved_name}」的成员，请用群名片/昵称或直接 @"
+            else:
+                tip = "请 @ 一个你感兴趣的人，例如：Eason persona @小明"
             self.api.groupService.send_group_msg(
-                group_id=event.group_id,
-                message=f"{At(qq=event.user_id)} 请 @ 一个你感兴趣的人，例如：Eason persona @小明",
+                group_id=event.group_id, message=f"{At(qq=event.user_id)} {tip}"
             )
             return
 
