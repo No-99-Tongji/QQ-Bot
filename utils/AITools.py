@@ -56,7 +56,7 @@ async def get_llm_response(
 ) -> str:
     if model == "gemini-3-flash-preview":
         client = AsyncOpenAI(api_key=os.environ["MNAPI_KEY"], base_url="https://api.mnapi.com/v1")
-    elif model == "deepseek-v4-pro" or model == "deepseek-v4-flash":
+    elif model in ("deepseek-v4-pro", "deepseek-v4-flash", "deepseek-flash", "deepseek-chat"):
         client = AsyncOpenAI(api_key=os.environ["DPSK_KEY"], base_url="https://api.deepseek.com")
     else:
         raise ValueError("Unsupported model")

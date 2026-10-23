@@ -264,7 +264,7 @@ async def _persona_text(target_id: int, nickname: str) -> str:
                 "content": f"以下是用户在 [QQ:{target_id}]（{nickname}）近期的群聊发言摘录（匿名群标签）：\n\n{transcript}",
             },
         ],
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
         thinking_enabled=False,
     )
     if "[NO REPLY]" in resp:
