@@ -123,6 +123,7 @@ class Bot:
         Log.info(f"获取到Bot的登录信息：{self.bot_id}")
         self.init_database()
         self.init_assistant_list()
+        self.load_env_secrets()
         self.init_plugins()
         Log.info("Bot初始化成功！")
 
@@ -154,6 +155,29 @@ class Bot:
         )
         for member in assistants:
             self.assistant_list.add(member["user_id"])
+
+    def load_env_secrets(self) -> None:
+        """
+        从 configs/auth.ini 注入 LLM 等 API 密钥到环境变量（AITools 通过 os.environ 读取）。
+        该文件只放在私有配置仓库，不随代码仓库分发；本地开发不存在时静默跳过。
+        ini 里每个 `KEY = VALUE` 都会原样注入为环境变量 <KEY>=<VALUE>（保留大小写）。
+        """
+        auth_path = os.path.join(self.configs_path, "auth.ini")
+        if not os.path.isfile(auth_path):
+            Log.info("未找到 configs/auth.ini，跳过环境密钥注入")
+            return
+        parser = configparser.ConfigParser()
+        parser.optionxform = str  # 保留 option 大小写（如 DPSK_KEY）
+        parser.read(auth_path, encoding="utf-8")
+        loaded: list[str] = []
+        for section in parser.sections():
+            for key, value in parser.items(section):
+                os.environ[key.strip()] = value.strip()
+                loaded.append(key.strip())
+        if loaded:
+            Log.info(f"已从 configs/auth.ini 注入环境密钥：{', '.join(loaded)}")
+        else:
+            Log.info("configs/auth.ini 存在但未读到任何密钥")
 
     def init_plugins(self) -> None:
         Log.info("开始加载插件")
