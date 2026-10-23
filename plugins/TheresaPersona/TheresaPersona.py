@@ -26,7 +26,6 @@ ANALYSIS_DIRECTIONS = (
     "身份/出身（职业、专业、在校学生身份等）",
     "是哪里人（从口音、提到的地名、生活习惯推断）",
     "口头禅（反复出现的高频用语）",
-    "在多少个群聊里活跃（只按匿名群标签描述数量和活跃程度，绝不披露真实群名或群号）",
     "常与谁互动、社会关系",
     "作息规律",
     "常用的语气、表情、网络用语",
@@ -165,11 +164,6 @@ class TheresaPersona(Plugins):
             if rows and not nickname:
                 nickname = rows[-1].user_nickname
 
-            # 活跃群排行：只用匿名标签，不含真实群名/群号
-            active_groups_desc = "、".join(
-                f"{group_label[gid]}（{cnt}条）" for gid, cnt in ordered_groups
-            )
-
             directions_txt = "\n".join(f"- {d}" for d in ANALYSIS_DIRECTIONS)
             system_prompt = (
                 "你是一位资深的行为分析专家。下面是一次性给你的一段某位QQ用户在若干群聊中的发言记录摘录，"
@@ -178,13 +172,12 @@ class TheresaPersona(Plugins):
                 "1. 只能依据给定材料推断，不要编造材料中没有的信息；信息不足的维度明确说明'暂无法判断'。\n"
                 "2. 分点输出，覆盖但不限于以下方向：\n"
                 f"{directions_txt}\n"
-                "3. 绝不披露任何真实群名、群号或能定位到具体群的细节（含群名片、群成员结构）；"
-                "提到活跃群时只用匿名标签（如'群A'、'群B'）。\n"
+                "3. 绝不披露任何真实群名、群号或能定位到具体群的细节（含群名片、群成员结构、活跃群信息）。\n"
                 "4. 用中文、口语化、有条理地输出，开头不必寒暄，直接给出分析正文。"
             )
             user_prompt = (
                 f"以下是用户在 [QQ:{target_id}]（{nickname}）近期的群聊发言摘录，按时间顺序排列。\n\n"
-                f"【活跃群聊】{active_groups_desc}\n\n【发言记录】\n{transcript}"
+                f"【发言记录】\n{transcript}"
             )
             Log.debug(f"插件{self.name}：已为 {target_id} 组装 {len(rows)} 条消息送审", debug)
 
