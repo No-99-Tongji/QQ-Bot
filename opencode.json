@@ -12,6 +12,16 @@
       }
     }
   },
+  "permission": {
+    "bash": "deny",
+    "read": "deny",
+    "write": "deny",
+    "edit": "deny",
+    "glob": "deny",
+    "grep": "deny",
+    "ls": "deny",
+    "webfetch": "deny"
+  },
   "mcp": {
     "qq-bot": {
       "type": "local",
