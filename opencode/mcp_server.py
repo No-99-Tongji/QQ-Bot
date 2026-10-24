@@ -221,10 +221,14 @@ def _sing_impl(group_id: int, song: str) -> str:
 # ----------------------------- persona -----------------------------
 
 
-def _resolve_target(group_id: int, target: str) -> tuple[int | None, str | None]:
-    """解析画像目标：QQ 号，或按群名片/昵称从该群成员列表解析"""
-    if target.isdigit():
-        return int(target), None
+async def _resolve_qq(group_id: int, target: str) -> int | None:
+    """把目标（QQ号/名字/昵称）解析成 QQ。当前群精确→当前群模糊→本群记录→全局记录，任一命中即返回"""
+    t = (target or "").strip()
+    if not t:
+        return None
+    if t.isdigit():
+        return int(t)
+    ln = t.lower()
     try:
         members = (
             _onebot_post("get_group_member_list", {"group_id": group_id, "no_cache": True}).get(
@@ -234,14 +238,33 @@ def _resolve_target(group_id: int, target: str) -> tuple[int | None, str | None]
         )
     except Exception:
         members = []
-    for mem in members:
-        if (
-            mem.get("card") == target
-            or mem.get("nickname") == target
-            or mem.get("card_or_nickname") == target
-        ):
-            return int(mem["user_id"]), None
-    return None, target
+    for m in members:
+        for key in ("card", "nickname", "card_or_nickname"):
+            c = str(m.get(key) or "").lower()
+            if ln and (ln == c or ln in c):
+                return int(m["user_id"])
+    try:
+        conn = await asyncpg.connect(_db_dsn())
+        try:
+            rows = await conn.fetch(
+                "SELECT DISTINCT user_id FROM messages "
+                "WHERE group_id=$1 AND (user_nickname ILIKE '%'||$2||'%' OR user_card ILIKE '%'||$2||'%') LIMIT 1",
+                group_id,
+                ln,
+            )
+            if not rows:
+                rows = await conn.fetch(
+                    "SELECT DISTINCT user_id FROM messages "
+                    "WHERE (user_nickname ILIKE '%'||$1||'%' OR user_card ILIKE '%'||$1||'%') LIMIT 1",
+                    ln,
+                )
+        finally:
+            await conn.close()
+        if rows:
+            return int(rows[0]["user_id"])
+    except Exception:
+        pass
+    return None
 
 
 async def _fetch_sampled_messages(target_id: int, max_: int = 100) -> list[dict]:
@@ -354,9 +377,9 @@ async def _persona_impl(group_id: int, target: str) -> str:
     if not target or not str(target).strip():
         return "请指定要画像的人（QQ号或群名片/昵称）。"
     target = str(target).strip()
-    qq, unresolved = _resolve_target(group_id, target)
+    qq = await _resolve_qq(group_id, target)
     if qq is None:
-        return f"在当前群没找到名为「{unresolved}」的成员。"
+        return f"没找到「{target}」对应的人（可让用户用 @ 或给出QQ号）。"
     return await _persona_text(qq, target)
 
 
@@ -365,9 +388,9 @@ async def _user_messages_impl(group_id: int, target: str, limit: int = 100) -> s
     if not target or not str(target).strip():
         return "请指定要查的人（QQ号或群名片/昵称）。"
     target = str(target).strip()
-    qq, unresolved = _resolve_target(group_id, target)
+    qq = await _resolve_qq(group_id, target)
     if qq is None:
-        return f"在当前群没找到名为「{unresolved}」的成员。"
+        return f"没找到「{target}」对应的人（可让用户用 @ 或给出QQ号）。"
     limit = max(1, min(int(limit), 200))
     rows = await _fetch_sampled_messages(qq, max_=limit)
     if not rows:
