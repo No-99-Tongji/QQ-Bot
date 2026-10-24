@@ -91,6 +91,23 @@ def _onebot_post(endpoint: str, payload: dict) -> dict:
     return requests.post(urljoin(ONEBOT, endpoint), json=payload, timeout=20).json()
 
 
+_IMAGE_PATH_RE = re.compile(r"\[CQ:image[^\]]*?path=([^,\]\s]+)")
+
+
+def _records_text(msg: str) -> str:
+    """把消息里的图片转成 [图:<本地路径>] 标记（供 opencode 直接 read 识图），其余 CQ 去掉"""
+    paths = _IMAGE_PATH_RE.findall(msg)
+    text = _strip_cq(msg)
+    if paths:
+        marker = (
+            " " + " ".join(f"[图:{p}]" for p in paths)
+            if text
+            else " ".join(f"[图:{p}]" for p in paths)
+        )
+        text = text + marker if text else marker
+    return text
+
+
 def _normalize(name: str) -> str:
     return name.replace(".mp3", "").replace(" ", "").replace("　", "").lower().strip()
 
@@ -360,8 +377,8 @@ async def _user_messages_impl(group_id: int, target: str, limit: int = 100) -> s
     nickname = rows[-1]["user_nickname"] or f"QQ:{qq}"
     lines = []
     for r in rows:
-        text = _strip_cq(r["msg"])
-        if not text or text.lower().startswith("eason"):
+        text = _records_text(r["msg"])
+        if not text:
             continue
         lines.append(f"[{label[r['group_id']]}] {r['user_nickname']}: {text}")
     if not lines:
