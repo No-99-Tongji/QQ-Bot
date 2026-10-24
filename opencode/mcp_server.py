@@ -448,39 +448,12 @@ async def _resolve_target_impl(group_id: int, name: str) -> str:
                 (r["user_card"] or r["user_nickname"] or f"{r['user_id']}", int(r["user_id"]))
             )
         if len(u2) == 1:
-            return f"{u2[0][0]} 的QQ号是 {u2[0][1]}（在该群出现）"
+            return f"{u2[0][0]} 的QQ号是 {u2[0][1]}"
         if u2:
             return "匹配到多个，请确认：" + "；".join(f"{n}({q})" for n, q in u2)
     except Exception:
         pass
-
-    # 再回退：在所有群的聊天记录里全局搜这个名字（不限定当前群）
-    try:
-        conn = await asyncpg.connect(_db_dsn())
-        try:
-            rws = await conn.fetch(
-                "SELECT DISTINCT user_id, user_nickname, user_card FROM messages "
-                "WHERE (user_nickname ILIKE '%'||$1||'%' OR user_card ILIKE '%'||$1||'%') LIMIT 10",
-                ln,
-            )
-        finally:
-            await conn.close()
-        seen3: set[int] = set()
-        u3 = []
-        for r in rws:
-            if r["user_id"] in seen3:
-                continue
-            seen3.add(r["user_id"])
-            u3.append(
-                (r["user_card"] or r["user_nickname"] or f"{r['user_id']}", int(r["user_id"]))
-            )
-        if len(u3) == 1:
-            return f"{u3[0][0]} 的QQ号是 {u3[0][1]}"
-        if u3:
-            return "匹配到多个（来自不同群），请确认：" + "；".join(f"{n}({q})" for n, q in u3)
-    except Exception:
-        pass
-    return f"在当前群和所有群的聊天记录里都没找到「{name}」对应的人。"
+    return f"在当前群和聊天记录里都没找到「{name}」对应的人。"
 
 
 @mcp.tool()
