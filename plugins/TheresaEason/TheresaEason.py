@@ -117,6 +117,39 @@ class TheresaEason(Plugins):
             return []
         return sorted(os.path.splitext(f)[0] for f in os.listdir(d) if f.lower().endswith(".mp3"))
 
+    _IMAGE_PATH_RE = re.compile(r"\[CQ:image[^\]]*?path=([^,\]\s]+)")
+
+    @classmethod
+    def _records_text(cls, msg: str) -> str:
+        """把图片转成 [图:<本地路径>] 标记（供 opencode read 识图），其余 CQ 去掉"""
+        paths = cls._IMAGE_PATH_RE.findall(msg)
+        text = cls._clean(msg)
+        if paths:
+            marker = " ".join(f"[图:{p}]" for p in paths)
+            text = (text + " " + marker).strip() if text else marker
+        return text
+
+    async def _resolve_reply_lines(self, message: str, group_id: int) -> list[str]:
+        """解析 [CQ:reply,id=...]，从库取被引用消息的内容（含图片路径）"""
+        lines: list[str] = []
+        for cq in CQHelper.loads_cq(message):
+            if cq.cq_type != "reply":
+                continue
+            rid = str(cq.id)
+            if not rid.lstrip("-").isdigit():
+                continue
+            async with self.session_factory() as session:
+                res = await session.execute(
+                    select(Message)
+                    .where(Message.group_id == group_id, Message.msg_id == int(rid))
+                    .order_by(desc(Message.id))
+                )
+                row = res.scalars().first()
+            if row is not None:
+                nick = row.user_nickname or f"QQ:{row.user_id}"
+                lines.append(f"[引用{nick}的消息] {self._records_text(row.msg)}")
+        return lines
+
     @staticmethod
     def _parse_opencode_output(raw: str) -> str:
         """从 opencode `--format json`（PTY 下可能夹 ANSI）输出里提取最终文本回复"""
@@ -230,11 +263,19 @@ class TheresaEason(Plugins):
                 if song_names
                 else ""
             )
+            reply_lines = await self._resolve_reply_lines(event.message, group_id)
+            reply_line = ""
+            if reply_lines:
+                reply_line = (
+                    "\n用户引用/回复了你这条消息，若要了解其中图片内容，请用 read 工具读取 [图:...] 里的路径：\n"
+                    + "\n".join(reply_lines)
+                )
 
             prompt = (
                 SYSTEM_HINT
                 + at_line
                 + songs_line
+                + reply_line
                 + f"\n\n当前会话：群{group_id}（{event.group_name or ''}），时间 {time.strftime('%Y-%m-%d %H:%M')}，"
                 f"发消息的用户：{event.nickname or event.user_id}（QQ号 {event.user_id}）。\n"
                 + ("最近群聊内容：\n" + "\n".join(context) if context else "（暂无历史）")
