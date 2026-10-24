@@ -68,9 +68,15 @@ class Plugins:
         self.error_info = ""
         self.config: configparser.SectionProxy = None
         self.effected_groups: list[int] = []
+        # 标记为 True 时，Bot 启动后会为 run_background() 单独挂一个后台任务（如周期补录/轮询）。
+        self.background: bool = False
 
     async def main(self, event, debug: bool):
         raise NotImplementedError("方法还未实现")
+
+    async def run_background(self) -> None:
+        """后台任务入口：仅当 self.background 为 True 时会被 Bot 调用。子类按需覆写。"""
+        return
 
     def set_status(self, status: str, error_info: str = ""):
         """

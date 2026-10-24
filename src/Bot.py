@@ -305,6 +305,16 @@ class Bot:
         event_ip, event_port = self.client_address.split(":")
         Log.info(f"启动监听服务 {self.client_address}")
         event_server = asyncio.create_task(event.run(event_ip, int(event_port)))
+        # 为声明了后台任务的插件挂独立的周期循环（如 MessageBackfill 断档补录）
+        background_tasks = [
+            asyncio.create_task(p.run_background())
+            for p in self.plugins_list
+            if getattr(p, "background", False)
+        ]
+        if background_tasks:
+            Log.info(
+                f"启动 {len(background_tasks)} 个插件后台任务：{', '.join(p.name for p in self.plugins_list if getattr(p, 'background', False))}"
+            )
         ## web controller 暂时弃用
         # web_controller = WebController(self)
         # web_ip, web_port = self.web_controller_address.split(":")
@@ -317,15 +327,19 @@ class Bot:
             Log.info(f"启动 Webhook Handler 服务 {self.webhook_handler_address}")
             webhook_server = asyncio.create_task(webhook_handler.run(webhook_ip, int(webhook_port)))
             try:
-                await asyncio.gather(event_server, webhook_server)
+                await asyncio.gather(event_server, webhook_server, *background_tasks)
             finally:
                 await event.stop()
                 await webhook_handler.stop()
+                for t in background_tasks:
+                    t.cancel()
         else:
             try:
-                await event_server
+                await asyncio.gather(event_server, *background_tasks)
             finally:
                 await event.stop()
+                for t in background_tasks:
+                    t.cancel()
 
 
 def check_config_files(configs_path: str) -> None:

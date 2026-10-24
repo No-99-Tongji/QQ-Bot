@@ -252,6 +252,20 @@ class Api:
             response = requests.post(self.api.bot_api_address + "get_msg", json=params)
             return response.json()
 
+        def get_group_msg_history(
+            self, group_id: int, message_seq: int = 0, return_size: int = 20
+        ) -> dict:
+            """拉取群消息历史。message_seq=0 取该群最新的一批；传具体 seq 取以它为界往前的一批。"""
+            params = {
+                "group_id": group_id,
+                "message_seq": message_seq,
+                "return_size": return_size,
+            }
+            response = requests.post(
+                self.api.bot_api_address + "get_group_msg_history", json=params
+            )
+            return response.json()
+
         def get_image(self, file_name: str) -> dict:
             params = {
                 "file": file_name,

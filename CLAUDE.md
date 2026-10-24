@@ -15,3 +15,8 @@
 - 插件的运行时真实配置在私有仓库 `qq-bot-configs`，程序只读 `.ini`；`configs/*.toml` 是草稿。
 - 部署：改代码 push 到 `No-99-Tongji/QQ-Bot`；改配置 push 到 `No-99-Tongji/qq-bot-configs`；两个仓库 push 都会触发服务器蓝绿自动部署。
 - 服务器细节见 `.claude/skills/deploy`。
+
+## 后台周期插件
+
+- `Plugins` 基类提供 `background` 标志 + `run_background()` 钩子：插件把 `background = True` 并在 `run_background()` 里写无限循环，`Bot.run()` 启动时会为该插件挂一个独立后台任务（挂载逻辑见 `src/Bot.py`）。
+- 例：`plugins/MessageBackfill/` 掉线断档补录。它用 OneBot `get_group_msg_history` 拉群历史，按 `msg_id` 去重，把库中缺失（掉线期间）的消息补进去。依赖 `messages.message_seq` 列（`ALTER TABLE messages ADD COLUMN message_seq bigint`，部署时需手动跑一次）。
