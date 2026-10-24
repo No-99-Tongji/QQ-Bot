@@ -88,7 +88,9 @@ class TheresaEason(Plugins):
             rows = list(result.scalars().all())
         lines: list[str] = []
         for row in reversed(rows):
-            text = self._clean(row.msg)
+            # 用 _records_text 而非 _clean：保留上下文里的图片为 [图:本地路径]，
+            # 让 opencode 的 read 也能读到群历史中的图片；其余 CQ 照常去掉。
+            text = self._records_text(row.msg)
             if not text or text.lower().startswith("eason"):
                 continue
             lines.append(f"{row.user_nickname}: {text}")
